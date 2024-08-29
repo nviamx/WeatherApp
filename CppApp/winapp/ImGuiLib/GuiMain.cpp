@@ -1,4 +1,4 @@
-﻿// Dear ImGui: standalone example application for DirectX 9
+﻿// Dear ImGui: standalone example application for DirectX 11
 
 // Learn about Dear ImGui:
 // - FAQ                  https://dearimgui.com/faq
@@ -7,28 +7,117 @@
 // - Introduction, links and more at the top of imgui.cpp
 
 #include "imgui.h"
-#include "imgui_impl_dx9.h"
 #include "imgui_impl_win32.h"
-#include <d3d9.h>
+#include "imgui_impl_dx11.h"
+#include <d3d11.h>
 #include <tchar.h>
 #include <string>
 #include "GuiMain.h"
 #include <thread>
 #include <chrono>
 using namespace std::chrono_literals;
+#include <vector>
+#include <ranges>
+
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
 
 // Data
-static LPDIRECT3D9              g_pD3D = nullptr;
-static LPDIRECT3DDEVICE9        g_pd3dDevice = nullptr;
-static bool                     g_DeviceLost = false;
+static ID3D11Device*            g_pd3dDevice = nullptr;
+static ID3D11DeviceContext*     g_pd3dDeviceContext = nullptr;
+static IDXGISwapChain*          g_pSwapChain = nullptr;
+static bool                     g_SwapChainOccluded = false;
 static UINT                     g_ResizeWidth = 0, g_ResizeHeight = 0;
-static D3DPRESENT_PARAMETERS    g_d3dpp = {};
+static ID3D11RenderTargetView*  g_mainRenderTargetView = nullptr;
+
+// Simple helper function to load an image into a DX11 texture with common settings
+// Use like this:
+//int my_image_width = 0;
+//int my_image_height = 0;
+//ID3D11ShaderResourceView* my_texture = NULL;
+//bool ret = LoadTextureFromFile("../../MyImage01.jpg", &my_texture, &my_image_width, &my_image_height);
+//IM_ASSERT(ret);
+
+
+bool LoadTextureFromFile(const char* filename, ID3D11ShaderResourceView** out_srv, int* out_width, int* out_height)
+{
+    // Load from disk into a raw RGBA buffer
+    int image_width = 0;
+    int image_height = 0;
+    unsigned char* image_data = stbi_load(filename, &image_width, &image_height, NULL, 4);
+    if (image_data == NULL)
+        return false;
+
+    // Create texture
+    D3D11_TEXTURE2D_DESC desc;
+    ZeroMemory(&desc, sizeof(desc));
+    desc.Width = image_width;
+    desc.Height = image_height;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    desc.CPUAccessFlags = 0;
+
+    ID3D11Texture2D* pTexture = NULL;
+    D3D11_SUBRESOURCE_DATA subResource;
+    subResource.pSysMem = image_data;
+    subResource.SysMemPitch = desc.Width * 4;
+    subResource.SysMemSlicePitch = 0;
+    g_pd3dDevice->CreateTexture2D(&desc, &subResource, &pTexture);
+
+    // Create texture view
+    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+    ZeroMemory(&srvDesc, sizeof(srvDesc));
+    srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MipLevels = desc.MipLevels;
+    srvDesc.Texture2D.MostDetailedMip = 0;
+    g_pd3dDevice->CreateShaderResourceView(pTexture, &srvDesc, out_srv);
+    pTexture->Release();
+
+    *out_width = image_width;
+    *out_height = image_height;
+    stbi_image_free(image_data);
+
+    return true;
+}
 
 // Forward declarations of helper functions
 bool CreateDeviceD3D(HWND hWnd);
 void CleanupDeviceD3D();
-void ResetDevice();
+void CreateRenderTarget();
+void CleanupRenderTarget();
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+//RTL strings
+// Function to determine the length of the UTF-8 character
+size_t utf8_char_length(char c) {
+    if ((c & 0x80) == 0x00) return 1; // 1-byte character
+    if ((c & 0xE0) == 0xC0) return 2; // 2-byte character
+    if ((c & 0xF0) == 0xE0) return 3; // 3-byte character
+    if ((c & 0xF8) == 0xF0) return 4; // 4-byte character
+    return 1; // Should not happen, treat as 1-byte character
+}
+
+// Function to reverse a UTF-8 string
+std::string reverse_utf8(const std::string_view input) {
+    std::vector<std::string_view> characters;
+    size_t i = 0;
+
+    while (i < input.size()) {
+        size_t char_len = utf8_char_length(input[i]);
+        characters.push_back(input.substr(i, char_len));
+        i += char_len;
+    }
+
+    // Reverse the order of the characters and concatenate them using ranges and views
+    auto reversed_view = characters | std::views::reverse | std::views::join;
+
+    return std::string(reversed_view.begin(), reversed_view.end());
+}
 
 // Main code
 
@@ -38,7 +127,7 @@ int GuiMain(drawcallback drawfunction, void* obj_ptr)
     //ImGui_ImplWin32_EnableDpiAwareness();
     WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(nullptr), nullptr, nullptr, nullptr, nullptr, L"ImGui Example", nullptr };
     ::RegisterClassExW(&wc);
-    HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"Dear ImGui DirectX9 Example", WS_OVERLAPPEDWINDOW, 100, 100, 1280, 800, nullptr, nullptr, wc.hInstance, nullptr);
+    HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"Dear ImGui DirectX11 Example", WS_OVERLAPPEDWINDOW, 100, 100, 1280, 800, nullptr, nullptr, wc.hInstance, nullptr);
 
     // Initialize Direct3D
     if (!CreateDeviceD3D(hwnd))
@@ -65,7 +154,7 @@ int GuiMain(drawcallback drawfunction, void* obj_ptr)
 
     // Setup Platform/Renderer backends
     ImGui_ImplWin32_Init(hwnd);
-    ImGui_ImplDX9_Init(g_pd3dDevice);
+    ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
 
     // Load Fonts
     // - If no fonts are loaded, dear imgui will use the default font. You can also load multiple fonts and use ImGui::PushFont()/PopFont() to select them.
@@ -80,15 +169,37 @@ int GuiMain(drawcallback drawfunction, void* obj_ptr)
     //io.Fonts->AddFontFromFileTTF("../../misc/fonts/DroidSans.ttf", 16.0f);
     //io.Fonts->AddFontFromFileTTF("../../misc/fonts/Roboto-Medium.ttf", 16.0f);
     //io.Fonts->AddFontFromFileTTF("../../misc/fonts/Cousine-Regular.ttf", 15.0f);
+    //ImFont* font = io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\ArialUni.ttf", 60.0f, nullptr, io.Fonts->GetGlyphRangesJapanese());
+    //IM_ASSERT(font != nullptr);
     // If the font contains Hebrew glyphs, you need to specify the ranges
+
+  /*  io.Fonts->AddFontDefault();
+    ImFont* myfont = io.Fonts->AddFontFromFileTTF("c:\\Users\\HP\\Desktop\\WeatherApp\\CppApp\\NotoColorEmoji.ttf", 30.0f);
+    IM_ASSERT(myfont != nullptr);*/
+    
+        io.Fonts->AddFontDefault();
+        ImFont* crystal = io.Fonts->AddFontFromFileTTF("c:\\Users\\HP\\Desktop\\WeatherApp\\CppApp\\crystal.ttf", 25.0f);
+        IM_ASSERT(crystal != nullptr);
+     
+        ImFont* playfont = io.Fonts->AddFontFromFileTTF("c:\\Users\\HP\\Desktop\\WeatherApp\\CppApp\\Playful.ttf", 25.0f);
+        IM_ASSERT(playfont != nullptr);
+
+   /* ImFont* myfont = io.Fonts->AddFontFromFileTTF("c:\\Users\\HP\\Desktop\\WeatherApp\\CppApp\\MorganChalk.ttf", 25.0f);
+    IM_ASSERT(myfont != nullptr);
+
+  
+    ImFont* epic = io.Fonts->AddFontFromFileTTF("c:\\Users\\HP\\Desktop\\WeatherApp\\CppApp\\epic.ttf", 27.0f);
+    IM_ASSERT(epic != nullptr);*/
+
     static const ImWchar ranges[] =
     {
         0x0020, 0x00FF, // Basic Latin + Latin Supplement
         0x0590, 0x05FF, // Greek and Coptic
         0,
     };
-    ImFont* font = io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\david.ttf", 18.0f, nullptr, &ranges[0]);
-    IM_ASSERT(font != nullptr);
+   /* ImFont* font = io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\calibril.ttf", 18.0f, nullptr, &ranges[0]);
+    IM_ASSERT(font != nullptr);*/
+
     // Our state
     bool show_demo_window = true;
     bool show_another_window = false;
@@ -111,31 +222,25 @@ int GuiMain(drawcallback drawfunction, void* obj_ptr)
         if (done)
             break;
 
-        // Handle lost D3D9 device
-        if (g_DeviceLost)
+        // Handle window being minimized or screen locked
+        if (g_SwapChainOccluded && g_pSwapChain->Present(0, DXGI_PRESENT_TEST) == DXGI_STATUS_OCCLUDED)
         {
-            HRESULT hr = g_pd3dDevice->TestCooperativeLevel();
-            if (hr == D3DERR_DEVICELOST)
-            {
-                ::Sleep(10);
-                continue;
-            }
-            if (hr == D3DERR_DEVICENOTRESET)
-                ResetDevice();
-            g_DeviceLost = false;
+            ::Sleep(10);
+            continue;
         }
+        g_SwapChainOccluded = false;
 
         // Handle window resize (we don't resize directly in the WM_SIZE handler)
         if (g_ResizeWidth != 0 && g_ResizeHeight != 0)
         {
-            g_d3dpp.BackBufferWidth = g_ResizeWidth;
-            g_d3dpp.BackBufferHeight = g_ResizeHeight;
+            CleanupRenderTarget();
+            g_pSwapChain->ResizeBuffers(0, g_ResizeWidth, g_ResizeHeight, DXGI_FORMAT_UNKNOWN, 0);
             g_ResizeWidth = g_ResizeHeight = 0;
-            ResetDevice();
+            CreateRenderTarget();
         }
 
         // Start the Dear ImGui frame
-        ImGui_ImplDX9_NewFrame();
+        ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
@@ -150,18 +255,18 @@ int GuiMain(drawcallback drawfunction, void* obj_ptr)
         {
             static float f = 0.0f;
             static int counter = 0;
-
+            ImGui::PushFont(crystal);
             ImGui::Begin("Hello, world!");                          // Create a window called "Hello, world!" and append into it.
+         
 
             ImGui::Text("This is some useful text.");               // Display some text (you can use a format strings too)
             // Text to be displayed RTL (assuming Hebrew)
               // Allocate temporary string for reversed characters
-            const char* text = u8"טקסטבעברית";
-            ImGui::Text(text);
-            std::string reversedText(text);
-            // Reverse characters for RTL display (assuming Hebrew characters are at the beginning)
-            std::reverse(reversedText.begin(), reversedText.begin()+ strlen(text));
-
+ 
+            static std::string_view text = (char*)u8" טקסט בעברית ";
+            ImGui::Text(text.data());
+            static std::string reversedText = reverse_utf8(text);
+ 
             ImGui::Text("%s", reversedText.c_str());
             ImGui::Checkbox("Demo Window", &show_demo_window);      // Edit bools storing our window open/close state
             ImGui::Checkbox("Another Window", &show_another_window);
@@ -178,10 +283,13 @@ int GuiMain(drawcallback drawfunction, void* obj_ptr)
             ImGui::Text("counter = %d", counter);
 
             ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
+               ImGui::PopFont();
             ImGui::End();
         }
 
         // 3. Show another simple window.
+        ImGui::PushFont(crystal);
+
         if (show_another_window)
         {
             ImGui::Begin("Another Window", &show_another_window);   // Pass a pointer to our bool variable (the window will have a closing button that will clear the bool when clicked)
@@ -190,27 +298,23 @@ int GuiMain(drawcallback drawfunction, void* obj_ptr)
                 show_another_window = false;
             ImGui::End();
         }
+        ImGui::PopFont();
 
         // Rendering
-        ImGui::EndFrame();
-        g_pd3dDevice->SetRenderState(D3DRS_ZENABLE, FALSE);
-        g_pd3dDevice->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
-        g_pd3dDevice->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
-        D3DCOLOR clear_col_dx = D3DCOLOR_RGBA((int)(clear_color.x*clear_color.w*255.0f), (int)(clear_color.y*clear_color.w*255.0f), (int)(clear_color.z*clear_color.w*255.0f), (int)(clear_color.w*255.0f));
-        g_pd3dDevice->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, clear_col_dx, 1.0f, 0);
-        if (g_pd3dDevice->BeginScene() >= 0)
-        {
-            ImGui::Render();
-            ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
-            g_pd3dDevice->EndScene();
-        }
-        HRESULT result = g_pd3dDevice->Present(nullptr, nullptr, nullptr, nullptr);
-        if (result == D3DERR_DEVICELOST)
-            g_DeviceLost = true;
+        ImGui::Render();
+        const float clear_color_with_alpha[4] = { clear_color.x * clear_color.w, clear_color.y * clear_color.w, clear_color.z * clear_color.w, clear_color.w };
+        g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, nullptr);
+        g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clear_color_with_alpha);
+        ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+
+        // Present
+        HRESULT hr = g_pSwapChain->Present(1, 0);   // Present with vsync
+        //HRESULT hr = g_pSwapChain->Present(0, 0); // Present without vsync
+        g_SwapChainOccluded = (hr == DXGI_STATUS_OCCLUDED);
     }
 
     // Cleanup
-    ImGui_ImplDX9_Shutdown();
+    ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
 
@@ -225,37 +329,56 @@ int GuiMain(drawcallback drawfunction, void* obj_ptr)
 
 bool CreateDeviceD3D(HWND hWnd)
 {
-    if ((g_pD3D = Direct3DCreate9(D3D_SDK_VERSION)) == nullptr)
+    // Setup swap chain
+    DXGI_SWAP_CHAIN_DESC sd;
+    ZeroMemory(&sd, sizeof(sd));
+    sd.BufferCount = 2;
+    sd.BufferDesc.Width = 0;
+    sd.BufferDesc.Height = 0;
+    sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    sd.BufferDesc.RefreshRate.Numerator = 60;
+    sd.BufferDesc.RefreshRate.Denominator = 1;
+    sd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+    sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    sd.OutputWindow = hWnd;
+    sd.SampleDesc.Count = 1;
+    sd.SampleDesc.Quality = 0;
+    sd.Windowed = TRUE;
+    sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+
+    UINT createDeviceFlags = 0;
+    //createDeviceFlags |= D3D11_CREATE_DEVICE_DEBUG;
+    D3D_FEATURE_LEVEL featureLevel;
+    const D3D_FEATURE_LEVEL featureLevelArray[2] = { D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0, };
+    HRESULT res = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, createDeviceFlags, featureLevelArray, 2, D3D11_SDK_VERSION, &sd, &g_pSwapChain, &g_pd3dDevice, &featureLevel, &g_pd3dDeviceContext);
+    if (res == DXGI_ERROR_UNSUPPORTED) // Try high-performance WARP software driver if hardware is not available.
+        res = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, createDeviceFlags, featureLevelArray, 2, D3D11_SDK_VERSION, &sd, &g_pSwapChain, &g_pd3dDevice, &featureLevel, &g_pd3dDeviceContext);
+    if (res != S_OK)
         return false;
 
-    // Create the D3DDevice
-    ZeroMemory(&g_d3dpp, sizeof(g_d3dpp));
-    g_d3dpp.Windowed = TRUE;
-    g_d3dpp.SwapEffect = D3DSWAPEFFECT_DISCARD;
-    g_d3dpp.BackBufferFormat = D3DFMT_UNKNOWN; // Need to use an explicit format with alpha if needing per-pixel alpha composition.
-    g_d3dpp.EnableAutoDepthStencil = TRUE;
-    g_d3dpp.AutoDepthStencilFormat = D3DFMT_D16;
-    g_d3dpp.PresentationInterval = D3DPRESENT_INTERVAL_ONE;           // Present with vsync
-    //g_d3dpp.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;   // Present without vsync, maximum unthrottled framerate
-    if (g_pD3D->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hWnd, D3DCREATE_HARDWARE_VERTEXPROCESSING, &g_d3dpp, &g_pd3dDevice) < 0)
-        return false;
-
+    CreateRenderTarget();
     return true;
 }
 
 void CleanupDeviceD3D()
 {
+    CleanupRenderTarget();
+    if (g_pSwapChain) { g_pSwapChain->Release(); g_pSwapChain = nullptr; }
+    if (g_pd3dDeviceContext) { g_pd3dDeviceContext->Release(); g_pd3dDeviceContext = nullptr; }
     if (g_pd3dDevice) { g_pd3dDevice->Release(); g_pd3dDevice = nullptr; }
-    if (g_pD3D) { g_pD3D->Release(); g_pD3D = nullptr; }
 }
 
-void ResetDevice()
+void CreateRenderTarget()
 {
-    ImGui_ImplDX9_InvalidateDeviceObjects();
-    HRESULT hr = g_pd3dDevice->Reset(&g_d3dpp);
-    if (hr == D3DERR_INVALIDCALL)
-        IM_ASSERT(0);
-    ImGui_ImplDX9_CreateDeviceObjects();
+    ID3D11Texture2D* pBackBuffer;
+    g_pSwapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer));
+    g_pd3dDevice->CreateRenderTargetView(pBackBuffer, nullptr, &g_mainRenderTargetView);
+    pBackBuffer->Release();
+}
+
+void CleanupRenderTarget()
+{
+    if (g_mainRenderTargetView) { g_mainRenderTargetView->Release(); g_mainRenderTargetView = nullptr; }
 }
 
 // Forward declare message handler from imgui_impl_win32.cpp
@@ -289,3 +412,4 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     }
     return ::DefWindowProcW(hWnd, msg, wParam, lParam);
 }
+

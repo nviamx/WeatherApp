@@ -36,4 +36,8 @@
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
+  <ItemGroup>
+    <Text Include="data.txt" />
+    <Text Include="Text.txt" />
+  </ItemGroup>
 </Project>

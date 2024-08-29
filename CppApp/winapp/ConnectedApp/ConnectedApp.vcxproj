@@ -106,7 +106,7 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>$(SolutionDir)\winapp\ImGuiLib;$(SolutionDir)shared\HttpSrc\openssl\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <LanguageStandard>stdcpplatest</LanguageStandard>
+      <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -149,6 +149,10 @@
     <ClInclude Include="CommonObject.h" />
     <ClInclude Include="DownloadThread.h" />
     <ClInclude Include="DrawThread.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="data.txt" />
+    <Text Include="Text.txt" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

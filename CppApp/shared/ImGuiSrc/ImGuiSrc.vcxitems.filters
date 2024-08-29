@@ -12,9 +12,6 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="$(MSBuildThisFileDirectory)backends\imgui_impl_dx9.cpp">
-      <Filter>backends</Filter>
-    </ClCompile>
     <ClCompile Include="$(MSBuildThisFileDirectory)backends\imgui_impl_win32.cpp">
       <Filter>backends</Filter>
     </ClCompile>
@@ -33,11 +30,11 @@
     <ClCompile Include="$(MSBuildThisFileDirectory)imgui_widgets.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="$(MSBuildThisFileDirectory)backends\imgui_impl_dx11.cpp">
+      <Filter>backends</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="$(MSBuildThisFileDirectory)backends\imgui_impl_dx9.h">
-      <Filter>backends</Filter>
-    </ClInclude>
     <ClInclude Include="$(MSBuildThisFileDirectory)backends\imgui_impl_win32.h">
       <Filter>backends</Filter>
     </ClInclude>
@@ -58,6 +55,9 @@
     </ClInclude>
     <ClInclude Include="$(MSBuildThisFileDirectory)imstb_truetype.h">
       <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="$(MSBuildThisFileDirectory)backends\imgui_impl_dx11.h">
+      <Filter>backends</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

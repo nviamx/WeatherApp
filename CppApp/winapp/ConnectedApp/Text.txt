@@ -1,0 +1,70 @@
+The code you have includes two separate threads: `DrawThread` and `DownloadThread`. Each thread performs different tasks and communicates through shared data in the `CommonObjects` structure. Here’s a detailed breakdown of how each thread works:
+
+### `DrawThread`
+
+The `DrawThread` is responsible for handling the graphical user interface (GUI) with ImGui and displaying weather information, including handling user interactions such as adding/removing favorite cities.
+
+#### Key Parts:
+
+1. **`DrawAppWindow` Function**:
+   - This function is the main rendering function for the ImGui window.
+   - It handles user input for city names, displays weather data, and manages the favorites list.
+   - It uses `ImGui::InputText` to get the city name and `ImGui::Button` to trigger the search.
+
+2. **Favorites Management**:
+   - The `favorites` variable is an `std::unordered_map` that stores favorite cities along with their temperatures.
+   - When the user interacts with the checkbox in the ImGui table, the city’s temperature is added to or removed from the `favorites` map.
+
+3. **Displaying Data**:
+   - The weather data is displayed in a table with columns for favorites, city name, country, temperature, and description.
+   - After the table, it lists all favorite cities and their temperatures.
+
+4. **Thread Execution**:
+   - The `DrawThread::operator()` method calls `GuiMain(DrawAppWindow, &common);` to set up and run the ImGui rendering loop.
+   - It then sets `common.exit_flag` to true to indicate that the thread should exit.
+
+### `DownloadThread`
+
+The `DownloadThread` is responsible for downloading weather data from an API based on the city name provided by the user and updating the `CommonObjects` with the fetched data.
+
+#### Key Parts:
+
+1. **Fetching Weather Data**:
+   - The thread continuously checks if `common.start_download` is true, indicating that a download should be triggered.
+   - It uses a mutex (`common.mtx`) to safely access shared data like the city name.
+
+2. **City Lookup**:
+   - It reads city coordinates from `data.txt` based on the city name provided.
+   - If the city is found, it updates the latitude and longitude in `common` and proceeds with the API request.
+
+3. **API Request**:
+   - Constructs an API request URL using the coordinates and sends a GET request to the OpenWeatherMap API.
+   - Parses the JSON response to extract weather data and updates `common.WeatherData`.
+
+4. **Thread Execution**:
+   - The `DownloadThread::operator()` method continuously loops, checking if `common.exit_flag` is true to determine when to stop.
+   - After fetching and parsing data, it sets `common.data_ready` to true to notify the `DrawThread` that new data is available.
+
+### How the Threads Work Together
+
+1. **Communication**:
+   - Both threads use `CommonObjects` to share data:
+     - `DrawThread` reads data from `common` to display it in the GUI.
+     - `DownloadThread` updates `common` with new weather data and coordinates.
+
+2. **Synchronization**:
+   - `std::mutex` (`common.mtx`) ensures that access to shared variables (e.g., city name, coordinates) is thread-safe.
+   - `common.start_download` is used to signal the `DownloadThread` to start fetching data.
+   - `common.data_ready` is used to signal the `DrawThread` that new weather data is available.
+
+3. **Process Flow**:
+   - The `DrawThread` handles user input and GUI rendering, updating the `favorites` map based on user interactions.
+   - The `DownloadThread` fetches weather data when requested and updates `common` with this data.
+   - `DrawThread` periodically checks `common.data_ready` to refresh the displayed weather data.
+
+### Summary
+
+- **`DrawThread`**: Manages GUI rendering and user interaction with ImGui, handles displaying weather data and favorites.
+- **`DownloadThread`**: Fetches weather data from an external API, processes the data, and updates the shared state.
+
+Both threads interact through shared `CommonObjects`, using mutexes to synchronize access and ensure data consistency.
